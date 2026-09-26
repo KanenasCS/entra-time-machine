@@ -1,0 +1,6 @@
+// Run FIRST. Lists EVERY operation name in AuditLogs with counts.
+// (v0.2.0 used keyword matching, which missed plurals like "credentials" and "secrets".)
+AuditLogs
+| where TimeGenerated > ago(90d)
+| summarize Rows = count(), Results = make_set(Result), Services = make_set(LoggedByService) by OperationName
+| order by Rows desc

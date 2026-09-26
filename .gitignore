@@ -1,0 +1,17 @@
+# Real tenant data: identity information, never commit
+anchor*.json
+auditlogs*.json
+evidence_*.json
+shapes*.txt
+sr_*.txt
+# Generated synthetic data
+data/*.json
+# Internal findings pending disclosure
+docs/internal/
+__pycache__/
+# Build and environments
+build/
+dist/
+*.egg-info/
+.venv/
+venv/

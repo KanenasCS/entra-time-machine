@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "identity-time-machine"
+version = "1.0.0rc1"
+description = "Reconstruct the Microsoft Entra ID identity graph at any past moment and find ephemeral privileged paths."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Kanenas", email = "noreply@github.com" }]
+keywords = ["entra-id", "azure-ad", "identity", "security", "forensics", "attack-paths", "sentinel"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Topic :: Security",
+  "Operating System :: OS Independent",
+]
+dependencies = []
+
+[project.optional-dependencies]
+sdk = ["azure-identity"]
+
+[project.scripts]
+itm = "itm.cli:main"
+itm-collect = "itm.collect:main"
+itm-shapes = "itm.shapes:main"
+
+[project.urls]
+Repository = "https://github.com/KanenasCS/identity-time-machine"
+
+[tool.setuptools]
+packages = ["itm"]

@@ -1,0 +1,32 @@
+// Identity Time Machine: export the Entra audit events the engine consumes.
+// Lookback must not exceed your AuditLogs retention. That retention IS your time-machine window.
+// Log Analytics query API caps results (~500k rows / ~64 MB). Split by time for large tenants.
+// Some operations below are NOT parsed yet. They are exported so `itm.shapes` can report their
+// structure (next edge types: app role assignments, OAuth grants, group owners).
+let lookback = 90d;
+AuditLogs
+| where TimeGenerated > ago(lookback)
+| where Result =~ "success"
+| where OperationName in~ (
+    // parsed
+    "Add member to group", "Remove member from group",
+    "Add member to role", "Remove member from role",
+    "Add member to role completed (PIM activation)",
+    "Remove member from role (PIM activation expired)",
+    "Add owner to application", "Remove owner from application",
+    "Add owner to service principal", "Remove owner from service principal",
+    "Add service principal credentials", "Remove service principal credentials",
+    "Update service principal credentials",
+    "Delete user", "Hard delete user", "Delete group", "Hard delete group",
+    "Delete application", "Hard delete application",
+    "Delete service principal", "Remove service principal", "Hard delete service principal",
+    // exported for shape analysis only
+    "Add member to role outside of PIM (permanent)", "Remove member from role outside of PIM (permanent)",
+    "Add app role assignment to service principal", "Remove app role assignment from service principal",
+    "Add delegated permission grant", "Remove delegated permission grant", "Consent to application",
+    "Add owner to group", "Remove owner from group",
+    "Update service principal", "Update application")
+    or OperationName contains "Certificates and secrets management"
+| project TimeGenerated, Id, OperationName, Result, Category, LoggedByService,
+          CorrelationId, InitiatedBy, TargetResources, AdditionalDetails
+| order by TimeGenerated asc
