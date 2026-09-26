@@ -1,128 +1,156 @@
 # Identity Time Machine
 
 [![tests](https://github.com/KanenasCS/identity-time-machine/actions/workflows/tests.yml/badge.svg)](https://github.com/KanenasCS/identity-time-machine/actions/workflows/tests.yml)
+![python](https://img.shields.io/badge/python-3.9%20%7C%203.10%20%7C%203.11%20%7C%203.12%20%7C%203.13-blue)
+![license](https://img.shields.io/badge/license-MIT-green)
 
-Reconstructs the Microsoft Entra ID identity graph at any past moment inside your audit log window, and finds **ephemeral privileged paths**: tier-0 access that existed for some time but no longer exists. The classic case is an attacker who adds themselves to a privileged group, acts, and removes themselves. Current-state tools see nothing.
+**See the Microsoft Entra ID identity graph as it was at any moment, and find the privileged access that came and went.**
 
-Pure Python 3.9+, no dependencies (optional `azure-identity` for app-based auth). Read-only against your tenant.
+An attacker adds a compromised account to a group nested under Global Administrator, plants a secret on a privileged app, then removes the group membership to cover their tracks. Every current-state tool (attack path graphs, role reviews, exposure dashboards) looks at the tenant today and sees nothing wrong.
 
-```bash
-pip install .            # installs the itm, itm-collect and itm-shapes commands
-pip install .[sdk]       # adds azure-identity for --auth sdk
+Identity Time Machine rebuilds the graph from a snapshot of today plus your Entra audit logs. It answers the questions an incident responder actually asks:
+
+* What could this account reach at the moment it was compromised?
+* Which tier-0 paths existed at any point in the last 90 days, but not anymore?
+* Who held privileged roles from outside this directory, and since when?
+
+```text
+$ itm ephemeral --from 2026-07-01T00:00:00Z --hide-pim
+
+ext.contractor@contoso.com -> Global Administrator  2026-07-08T10:00:00Z .. 2026-07-22T17:00:00Z  (14d 7h)  [medium]
+    ext.contractor@contoso.com -member_of-> IT-Admins -has_role-> Global Administrator
+partner-escalation (foreign) -> Application Administrator  2026-08-12T10:00:00Z .. 2026-08-12T16:00:00Z  (6h)  [high]
+    partner-escalation (foreign) -has_role-> Application Administrator
+Ivan Petrov -> Cloud Application Administrator  2026-08-25T10:00:00Z .. 2026-08-28T16:00:00Z  (3d 6h)  [high]
+    Ivan Petrov -owns-> Reporting-Tool -backs-> Reporting-Tool (SP) -has_role-> Cloud Application Administrator
+Dave Miller -> Global Administrator  2026-09-02T02:14:00Z .. 2026-09-02T04:31:00Z  (2h 17m)  [high]
+    Dave Miller -member_of-> Tier0-Ops -member_of-> IT-Admins -has_role-> Global Administrator
+Dave Miller -> Privileged Role Administrator  2026-09-02T02:40:00Z .. 2026-09-05T11:00:00Z  (3d 8h)  [high]
+    Dave Miller -holds 952ef7e4..-> Backup-Automation -backs-> Backup-Automation (SP) -has_role-> Privileged Role Administrator
 ```
 
-Every `python -m itm ...` example below also works as `itm ...` once installed.
+Today, Dave Miller holds no roles at all:
 
-## Status
-
-| Area | Validation |
-|---|---|
-| Engine | Synthetic ground truth, 359 checkpoints: edge precision 0.9999, recall 0.9861, 7 of 7 ephemeral tier-0 paths, temporal trap correct |
-| Collector | Round-trip against a fake Graph with paging, throttling, token expiry, noise objects |
-| Real tenant | 90-day window: 0 parse errors, duplicate rows collapsed, 0 conflicts, principals outside the directory detected |
-| Rebuild of a real past state | Pending: run the acceptance test below |
-
-## What it answers
-
-* What could this account reach at 03:14 last Tuesday?
-* What could it reach at any point during the incident window?
-* Which tier-0 paths existed in the last 90 days but not now?
-* Which roles are held by principals outside this directory, and since when?
-
-## Quickstart (offline)
-
-```bash
-python synthetic/run_all.py        # generate a synthetic tenant and run every test
-A="--anchor data/anchor.json --logs data/auditlogs.json"
-python -m itm $A ephemeral --from 2026-07-02T00:00:00Z
-python -m itm $A reach dave --at 2026-09-02T03:00:00Z
-python -m itm $A window-reach frank --from 2026-07-02T00:00:00Z --naive
+```text
+$ itm reach dave.miller@contoso.com --at 2026-09-26T07:00:00Z
+no roles reachable
 ```
 
-## Real tenant
+## Features
 
-Anchor and log files contain identity data. `.gitignore` blocks them. Keep them internal.
+* **Point-in-time graph.** Reconstruct group memberships, directory roles, app and service principal ownership, and credentials at any timestamp inside your log retention.
+* **Ephemeral path detection.** Find tier-0 access that existed for minutes, hours or days and was then removed, with the exact path and duration.
+* **Temporally correct reachability.** Paths are only reported when every edge existed at the same moment. Merging all edges seen in a window invents paths that never existed, and the tool shows you the difference (`--naive`).
+* **Foreign principal detection.** Roles held by groups and identities from other tenants (partner, delegated admin and governance relationships) are identified and treated as actors.
+* **Confidence on every edge.** Each interval carries high, medium or low confidence plus a note explaining how its start and end were determined.
+* **Read-only and dependency-free.** Pure Python standard library. Reads Microsoft Graph and your existing Log Analytics or Sentinel workspace. Writes nothing to the tenant.
+
+## Install
+
+```bash
+pip install git+https://github.com/KanenasCS/identity-time-machine
+```
+
+Requires Python 3.9 or later. For app-based authentication, install the optional extra: `pip install "identity-time-machine[sdk] @ git+https://github.com/KanenasCS/identity-time-machine"`.
+
+## Usage
+
+You need Entra audit logs flowing into a Log Analytics workspace (the `AuditLogs` table, as with Microsoft Sentinel). Your lookback equals that table's retention.
+
+**1. Snapshot the tenant as it is now**
 
 ```bash
 az login --tenant <tenant-id>
-WS=<workspace-customer-id>; TENANT=<tenant-id>
-
-# 1. snapshot first, so the log export covers everything up to it
-python -m itm.collect --out anchor.json --tenant $TENANT
-
-# 2. wait ~30 min for AuditLogs ingestion, then export
-az monitor log-analytics query -w $WS --timespan P90D \
-  --analytics-query "$(cat queries/auditlogs_export.kql)" -o json > auditlogs.json
-
-# 3. validate and hunt
-python -m itm.shapes auditlogs.json > shapes.txt     # redacted parser-assumption report
-A="--anchor anchor.json --logs auditlogs.json"
-python -m itm $A summary                              # conflicts = accuracy signal
-python -m itm $A ephemeral --from <start>
-python -m itm $A foreign
+itm-collect --out anchor.json --tenant <tenant-id>
 ```
 
-Use Cloud Shell Bash. In PowerShell, `$(cat file.kql)` joins lines and the first `//` comment breaks the query.
-
-**Auth.** Default uses the az CLI token (needs at least Global Reader). If an endpoint returns 403, use an app registration with `User.Read.All`, `GroupMember.Read.All`, `Application.Read.All`, `RoleManagement.Read.Directory` and `--auth sdk`.
-
-## Acceptance test (prove it on your tenant)
-
-1. `python -m itm.collect --out anchor_A.json --tenant $TENANT`
-2. Make harmless, timed test changes: a role-assignable test group with Message Center Reader, a test user added then removed, a test app with a secret added then deleted, the test user re-added then deleted.
-3. Wait 30 min. `python -m itm.collect --out anchor_B.json --tenant $TENANT`, then export `auditlogs.json`.
-4. Run:
+**2. Export the audit logs** (about 30 minutes later, to allow for ingestion delay)
 
 ```bash
-python -m itm --anchor anchor_B.json --logs auditlogs.json replay-check --baseline anchor_A.json
-python -m itm --anchor anchor_B.json --logs auditlogs.json history itm-test-group
-python -m itm --anchor anchor_B.json --logs auditlogs.json history itm-test-app
+az monitor log-analytics query -w <workspace-id> --timespan P90D \
+  --analytics-query "$(cat queries/auditlogs_export.kql)" -o json > auditlogs.json
 ```
 
-**Pass:** `replay-check` prints `RESULT: PASS` (0 missing, 0 extra), and the history intervals match your noted times. Delete the test objects afterwards.
+**3. Investigate**
+
+```bash
+itm --anchor anchor.json --logs auditlogs.json summary
+itm --anchor anchor.json --logs auditlogs.json ephemeral --from 2026-07-01T00:00:00Z
+itm --anchor anchor.json --logs auditlogs.json reach alice@contoso.com --at 2026-09-02T03:00:00Z
+```
 
 ## Commands
 
-| Command | Purpose |
+| Command | What it answers |
 |---|---|
-| `summary` | Window, parse stats, duplicates dropped, foreign principals, conflicts |
-| `state-at T` | Every edge present at T |
-| `reach P --at T` | Roles a principal could reach at T, with paths |
-| `window-reach P --from --to [--naive]` | Everything reachable at any moment in a window |
-| `ephemeral --from --to [--hide-pim]` | Tier-0 reach that existed in the window but not now |
-| `foreign` | Roles held by principals outside the directory, over time |
-| `history OBJ` | Every interval touching an object |
-| `replay-check --baseline A` | Acceptance test: rebuild an earlier snapshot |
-| `python -m itm.collect` | Read-only Graph snapshot (anchor) |
-| `python -m itm.shapes LOGS` | Redacted structure report for parser validation |
+| `summary` | Log window, parse statistics, foreign principals, reconciliation conflicts |
+| `ephemeral --from T1 [--to T2] [--hide-pim]` | Tier-0 access that existed in the window but not now |
+| `reach PRINCIPAL --at T` | Every role a principal could reach at a moment, with the path |
+| `window-reach PRINCIPAL --from T1 [--to T2] [--naive]` | Everything a principal could reach at any moment in a window |
+| `state-at T [--type TYPE]` | Every edge in the graph at a moment |
+| `history OBJECT` | Every interval that touched a user, group, app or role |
+| `foreign` | Roles held by principals outside this directory, over time |
+| `replay-check --baseline OLDER_ANCHOR` | Verifies reconstruction against an earlier snapshot |
+| `itm-collect` | Takes the read-only Graph snapshot |
+| `itm-shapes LOGS` | Redacted structure report of an audit log export, safe to share |
+
+Principals can be given as display name, UPN, object ID, or an object ID prefix of at least 8 characters.
 
 ## How it works
 
-**Anchor plus reverse replay.** The anchor is the graph now. The engine walks audit events newest to oldest and inverts each: an add closes an interval, a remove opens one. Output is edge validity intervals with confidence and notes.
+```mermaid
+flowchart LR
+    S["Graph snapshot<br/>(state now)"] --> E["Reverse replay engine"]
+    L["Entra AuditLogs<br/>(Log Analytics / Sentinel)"] --> E
+    E --> T["Edge timeline<br/>intervals + confidence"]
+    T --> Q1["reach at T"]
+    T --> Q2["reach over a window"]
+    T --> Q3["ephemeral tier-0 paths"]
+    T --> Q4["foreign principals"]
+```
 
-**Unlogged removals** are inferred in order: deletion of an endpoint, PIM expiry time, next add of the same edge, default PIM duration, otherwise present until the anchor (conservative).
+The snapshot is ground truth for now. The engine walks audit events from newest to oldest and inverts each one: undoing an add closes an interval, undoing a removal opens one. The result is a validity interval for every edge. Queries evaluate reachability at each moment the graph changed, so every reported path existed as a whole.
 
-**Duplicate rows.** Entra can write one change several times. Repeats of the same action on the same edge within 60 seconds are collapsed.
+When a removal was never logged, the end is inferred from the strongest available evidence and the confidence is lowered accordingly. Details are in [docs/how-it-works.md](docs/how-it-works.md).
 
-**Temporally correct windows.** Reach over a window is evaluated at every change point, never on the union of all edges seen, which would invent paths whose edges never co-existed.
+## Permissions
 
-**Foreign principals.** A principal is typed `ForeignPrincipal` when the collector cannot find it in the directory, when its `Principal Tenant ID` differs from the home tenant, or when it holds a role and never appears in the directory. Foreign principals count as actors in every report.
+| Mode | Requirement |
+|---|---|
+| `--auth cli` (default) | Signed-in user with at least **Global Reader**, token from Azure CLI |
+| `--auth sdk` | App registration with `User.Read.All`, `GroupMember.Read.All`, `Application.Read.All`, `RoleManagement.Read.Directory` (application permissions) |
+| Log export | Read access to the workspace that holds `AuditLogs` |
 
-**Edges:** `member_of`, `has_role`, `owns`, `credential` (attributed to whoever added it), `backs` (app to its service principal).
+## Coverage
 
-## Limitations
+| Relationship | Status |
+|---|---|
+| Group membership, including nesting | Supported |
+| Directory role assignments, active and PIM activations | Supported |
+| Application and service principal ownership | Supported |
+| Application and service principal secrets and certificates | Supported |
+| Foreign principals holding roles | Supported |
+| App role assignments (Graph application permissions) | Planned |
+| Federated identity credentials | Planned |
+| Group ownership | Planned |
+| Delegated permission grants | Planned |
+| Azure RBAC | Planned |
 
-* Lookback equals AuditLogs retention.
-* Edges granted before the window and removed silently inside it cannot be recovered from logs.
-* Credentials that predate the window have an unknown holder.
-* Not modeled yet: app role assignments, federated identity credentials, group owners, delegated permission grants, PIM eligibility, Azure RBAC.
-* Snapshots are not atomic. Changes during collection can appear as conflicts.
+Two boundaries apply by design. The lookback can never exceed your `AuditLogs` retention, and a relationship granted before that window and removed without any logged event cannot be recovered from logs alone.
 
-## Roadmap
+## Data handling
 
-App role edges with tier-0 Graph permissions; federated credentials and app role snapshots in the collector; group owners; daily anchors with forward replay; accuracy check against Entra Backup and Recovery; MCP interface.
+Snapshots and log exports contain identity data from your tenant. Keep them internal. The repository `.gitignore` excludes them by default. When sharing diagnostics, use `itm-shapes`, which removes object IDs, UPNs, IP addresses and display names.
 
-See [CHANGELOG.md](CHANGELOG.md).
+## Documentation
+
+* [How it works](docs/how-it-works.md): replay algorithm, inference rules, duplicate handling, foreign detection
+* [Testing](docs/testing.md): offline test suite and verifying reconstruction on your own tenant
+* [Troubleshooting](docs/troubleshooting.md): permissions, ingestion delay, shells, parser validation
+
+## Contributing
+
+Issues and pull requests are welcome. Run `python synthetic/run_all.py` before submitting. Never attach real tenant files. See [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 
 ## License
 

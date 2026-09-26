@@ -27,7 +27,15 @@ NS = uuid.UUID("7d1a2c4e-0000-4000-8000-17e0715e0001")
 UTC = timezone.utc
 T0 = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
 ANCHOR = datetime(2026, 9, 26, 8, 0, tzinfo=UTC)
-DOMAIN = "contoso.example"
+DOMAIN = "contoso.com"
+PEOPLE = {  # internal key -> (display name, UPN prefix)
+    "alice": ("Alice Moreno", "alice.moreno"), "bob": ("Bob Keller", "bob.keller"),
+    "carol": ("Carol Diaz", "carol.diaz"), "dave": ("Dave Miller", "dave.miller"),
+    "erin": ("Erin Walsh", "erin.walsh"), "frank": ("Frank Osei", "frank.osei"),
+    "grace": ("Grace Lin", "grace.lin"), "heidi": ("Heidi Novak", "heidi.novak"),
+    "ivan": ("Ivan Petrov", "ivan.petrov"), "judy": ("Judy Chen", "judy.chen"),
+    "temp-contractor": ("Contractor (temp)", "ext.contractor"),
+}
 HOME_TENANT = str(uuid.uuid5(uuid.UUID("7d1a2c4e-0000-4000-8000-17e0715e0001"), "tenant"))
 PARTNER_TENANT = str(uuid.uuid5(uuid.UUID("7d1a2c4e-0000-4000-8000-17e0715e0001"), "tenant:partner"))
 
@@ -66,7 +74,8 @@ class Sim:
     # objects
     def user(self, n):
         i = gid("user:" + n)
-        self.objects[i] = {"type": "User", "displayName": n, "userPrincipalName": f"{n}@{DOMAIN}"}
+        display, upn = PEOPLE.get(n, (n, n))
+        self.objects[i] = {"type": "User", "displayName": display, "userPrincipalName": f"{upn}@{DOMAIN}"}
         return i
 
     def group(self, n):

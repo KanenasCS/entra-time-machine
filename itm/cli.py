@@ -10,7 +10,7 @@ from collections import Counter
 
 from .model import TIER0_ROLES, Anchor, fmt_time, parse_time, role_node
 from .parse import load_rows, parse_rows
-from .reach import (TIER0_NODES, ephemeral_tier0, format_path, format_span,
+from .reach import (TIER0_NODES, ephemeral_tier0, format_path, format_span, human_duration,
                     naive_union_reach, reach_from, window_reach)
 from .timeline import build_timeline
 
@@ -144,7 +144,7 @@ def main(argv=None):
             print("no ephemeral tier-0 paths in window")
         for _, actor, role, s in sorted(rows):
             flag = " PIM" if s.via_pim else ""
-            print(f"{tl.name(actor)} -> {tl.name(role)}  {format_span(s)}  [{s.confidence}{flag}]")
+            print(f"{tl.name(actor)} -> {tl.name(role)}  {format_span(s)}  ({human_duration(s)})  [{s.confidence}{flag}]")
             print(f"    {format_path(tl, s.path)}")
         return
 

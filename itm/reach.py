@@ -146,3 +146,13 @@ def format_span(s: Span) -> str:
     a = ("<=" if s.open_start else "") + fmt_time(s.start)
     b = fmt_time(s.end) + ("+" if s.open_end else "")
     return f"{a} .. {b}"
+
+
+def human_duration(s: Span) -> str:
+    secs = int((s.end - s.start).total_seconds())
+    d, rem = divmod(secs, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    parts = [f"{d}d" if d else "", f"{h}h" if h else "", f"{m}m" if m and not d else ""]
+    out = " ".join(p for p in parts if p) or "<1m"
+    return ("at least " if s.open_start or s.open_end else "") + out
